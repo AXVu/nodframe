@@ -2,8 +2,8 @@ use csv::{Reader, StringRecord, Writer};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fs::File;
-use std::io::Read;
 use std::ops::{Add, Div, Mul, Sub};
+use std::str::FromStr;
 
 // Comp enum for filtering
 pub enum Comp {
@@ -79,6 +79,13 @@ impl<
             Column::Discrete(d) => d.len(),
         }
     }
+
+    fn to_string(&self) -> String {
+        match self {
+            Column::Numeric(n) => n.to_string(),
+            Column::Discrete(d) => d.to_string(),
+        }
+    }
 }
 
 // DiscreteColumn struct contains only string values
@@ -132,6 +139,15 @@ impl DiscreteColumn {
             }
         }
         filter
+    }
+
+    pub fn to_string(&self) -> String {
+        let mut result = self.key.clone();
+        let data = self.items.join(", ");
+        result.push_str(": [");
+        result.push_str(&data);
+        result.push_str("]");
+        result
     }
 }
 
@@ -192,6 +208,16 @@ impl<
             .iter()
             .map(|x| compare(x, &comparison, val))
             .collect()
+    }
+
+    pub fn to_string(&self) -> String {
+        let mut result = self.key.clone();
+        let str_form: Vec<String> = self.items.iter().map(|x| x.to_string()).collect();
+        result.push_str(": [");
+        result.push_str(&str_form.join(", "));
+        result.push_str("]");
+
+        result
     }
 }
 
@@ -298,26 +324,44 @@ impl<
         writer.flush()?;
         Ok(())
     }
+
+    pub fn to_string(&self) -> String {
+        let mut result = String::from("nodframe:\n");
+        for col in self.columns.iter() {
+            result.push_str(&col.to_string());
+            result.push_str("\n");
+        }
+        result.push_str("Num Rows: ");
+        result.push_str(&self.num_rows.to_string());
+
+        result
+    }
 }
 
 // frame_from_csv reads in a csv and automatically converts it into a
 pub fn frame_from_csv<
-    T: Clone + Eq + std::hash::Hash + Add + Div + Mul + Sub + PartialOrd + std::string::ToString,
-> (
+    T: Clone
+        + Eq
+        + std::hash::Hash
+        + Add
+        + Div
+        + Mul
+        + Sub
+        + PartialOrd
+        + std::string::ToString
+        + FromStr,
+>(
     file_path: String,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<NodFrame<T>, Box<dyn Error>> {
     let file = File::open(file_path)?;
     let mut reader = Reader::from_reader(file);
     let mut record = StringRecord::new();
-    let mut header = Vec::new();
-    if reader.read_record(&mut record)? {
-        header = record.iter().map(|s| s.to_string()).collect();
-    } else {
-        return Err(From::from("No text in file"));
-    }
+    let head = reader.headers()?.clone();
+    let header: Vec<&str> = head.iter().collect();
     let mut data: Vec<Vec<String>> = vec![vec![]; header.len()];
+
     while !reader.is_done() {
-        let mut row: Vec<String> = Vec::new();
+        let row: Vec<String>;
         if reader.read_record(&mut record)? {
             row = record.iter().map(|s| s.to_string()).collect();
         } else {
@@ -327,7 +371,27 @@ pub fn frame_from_csv<
             data[i].push(row[i].clone());
         }
     }
-    Ok(())
+    let mut num_keys = Vec::new();
+    let mut disc_keys = Vec::new();
+    let mut num_data = Vec::new();
+    let mut disc_data = Vec::new();
+
+    for i in 0..header.len() {
+        if let Ok(_) = data[i][0].parse::<T>() {
+            num_keys.push(header[i].to_string());
+            let mut col = Vec::new();
+            for element in data[i].iter() {
+                if let Ok(n) = element.parse::<T>() {
+                    col.push(n);
+                }
+            }
+            num_data.push(col);
+        } else {
+            disc_keys.push(header[i].to_string());
+            disc_data.push(data[i].clone());
+        }
+    }
+    Ok(frame_from_vecs(num_keys, num_data, disc_keys, disc_data))
 }
 
 // Build functions for Frame
@@ -431,7 +495,7 @@ mod col_tests {
 }
 
 mod frame_tests {
-    use crate::frame_from_vecs;
+    use super::*;
 
     #[test]
     fn csv_test() {
@@ -440,12 +504,14 @@ mod frame_tests {
             vec![vec![1, 2, 3, 4], vec![14, 54, 7, 2]],
             vec![String::from("kabang")],
             vec![vec![
-                String::from("1"),
-                String::from("2"),
-                String::from("3"),
-                String::from("4"),
+                String::from("1a"),
+                String::from("2a"),
+                String::from("3a"),
+                String::from("4a"),
             ]],
         );
         frame.to_csv(String::from("hehe.csv"));
+        let frame2 = frame_from_csv::<i32>(String::from("hehe.csv")).unwrap();
+        assert_eq!(frame.to_string(), frame2.to_string());
     }
 }
